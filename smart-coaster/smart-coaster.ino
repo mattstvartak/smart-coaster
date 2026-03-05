@@ -35,13 +35,13 @@ float smoothed_weight = 0;
 struct IngColor { uint8_t r, g, b; };
 
 // App states
-enum State { STATE_MENU, STATE_ADD_GLASS, STATE_POURING, STATE_UNWIGHED, STATE_FINISH, STATE_SETTINGS };
+enum State { STATE_MENU, STATE_ADD_GLASS, STATE_POURING, STATE_UNWEIGHED, STATE_FINISH, STATE_SETTINGS, STATE_OVERPOUR };
 State appState = STATE_MENU;
 
-// Ingredient: weight=0 means unweighed (e.g. bitters, garnish)
 struct Ingredient {
   const char* name;
-  float weight;  // grams, 0 = unweighed/manual
+  float ml;     // metric measurement (used for grams on scale)
+  float oz;     // imperial measurement (for display only)
 };
 
 struct Drink {
@@ -53,84 +53,84 @@ struct Drink {
   const char* finish;       // "Stir", "Shake", etc.
 };
 
-// Weights in ml (= grams). Rounded to 25ml/0.25oz increments.
+// Standard bar pours: 15ml=0.5oz, 30ml=1oz, 45ml=1.5oz, 60ml=2oz, 90ml=3oz, 120ml=4oz, 150ml=5oz
 Drink drinks[] = {
   {
     "Daiquiri",
-    {{"White Rum", 50}, {"Lime Juice", 25}, {"Simple Syrup", 25}},
-    3,  // 50ml/2oz, 25ml/1oz, 25ml/0.75oz
+    {{"White Rum", 60, 2}, {"Lime Juice", 30, 1}, {"Simple Syrup", 15, 0.5}},
+    3,
     {},
     0,
     "Shake & strain"
   },
   {
     "Gin & Tonic",
-    {{"Gin", 50}, {"Tonic Water", 125}},
-    2,  // 50ml/2oz, 125ml/4oz
+    {{"Gin", 45, 1.5}, {"Tonic Water", 150, 5}},
+    2,
     {"Lime wedge"},
     1,
     "Stir gently"
   },
   {
     "Margarita",
-    {{"Tequila", 50}, {"Lime Juice", 25}, {"Triple Sec", 25}},
-    3,  // 50ml/2oz, 25ml/1oz, 25ml/1oz
+    {{"Tequila", 60, 2}, {"Lime Juice", 30, 1}, {"Triple Sec", 30, 1}},
+    3,
     {"Salt rim"},
     1,
     "Shake & strain"
   },
   {
     "Martini",
-    {{"Gin", 75}, {"Dry Vermouth", 25}},
-    2,  // 75ml/2.5oz, 25ml/0.5oz
+    {{"Gin", 75, 2.5}, {"Dry Vermouth", 15, 0.5}},
+    2,
     {"Olive or twist"},
     1,
     "Stir & strain"
   },
   {
     "Mojito",
-    {{"White Rum", 50}, {"Lime Juice", 25}, {"Simple Syrup", 25}, {"Soda Water", 50}},
-    4,  // 50ml, 25ml, 25ml, 50ml
+    {{"White Rum", 60, 2}, {"Lime Juice", 30, 1}, {"Simple Syrup", 15, 0.5}, {"Soda Water", 60, 2}},
+    4,
     {"Muddle mint", "Mint sprig"},
     2,
     "Stir gently"
   },
   {
     "Moscow Mule",
-    {{"Vodka", 50}, {"Lime Juice", 25}, {"Ginger Beer", 125}},
-    3,  // 50ml, 25ml, 125ml
+    {{"Vodka", 60, 2}, {"Lime Juice", 15, 0.5}, {"Ginger Beer", 120, 4}},
+    3,
     {"Lime wedge"},
     1,
     "Stir gently"
   },
   {
     "Negroni",
-    {{"Gin", 25}, {"Campari", 25}, {"Sweet Vermouth", 25}},
-    3,  // 25ml/1oz each
+    {{"Gin", 30, 1}, {"Campari", 30, 1}, {"Sweet Vermouth", 30, 1}},
+    3,
     {"Orange peel"},
     1,
     "Stir & strain"
   },
   {
     "Old Fashioned",
-    {{"Bourbon", 50}, {"Simple Syrup", 10}},
-    2,  // 50ml/2oz, splash
+    {{"Bourbon", 60, 2}, {"Simple Syrup", 8, 0.25}},
+    2,
     {"2 dashes Bitters", "Orange peel"},
     2,
     "Stir gently"
   },
   {
     "Paloma",
-    {{"Tequila", 50}, {"Lime Juice", 25}, {"Grapefruit Soda", 125}},
-    3,  // 50ml, 25ml, 125ml
+    {{"Tequila", 60, 2}, {"Lime Juice", 15, 0.5}, {"Grapefruit Soda", 120, 4}},
+    3,
     {"Salt rim", "Lime wedge"},
     2,
     "Stir gently"
   },
   {
     "Whiskey Sour",
-    {{"Bourbon", 50}, {"Lemon Juice", 25}, {"Simple Syrup", 25}},
-    3,  // 50ml, 25ml, 25ml
+    {{"Bourbon", 60, 2}, {"Lemon Juice", 30, 1}, {"Simple Syrup", 15, 0.5}},
+    3,
     {"Cherry garnish"},
     1,
     "Shake & strain"
@@ -144,18 +144,22 @@ int currentUnweighed = 0;
 float glassWeight = 0;
 float cumulativeWeight = 0;
 
+// Pour settling detection
+float lastPourWeight = 0;
+unsigned long settleStart = 0;
+bool settling = false;
+const unsigned long SETTLE_TIME = 1500;  // ms of no change = stopped pouring
+const float SETTLE_THRESHOLD = 1.0;     // grams change to reset settle
+const float CLOSE_ENOUGH = 3.0;         // grams tolerance (close enough)
+const float WAY_OVER = 15.0;            // grams over = overpour warning
+
 // Settings
 bool muted = false;
-uint8_t screenBrightness = 255;  // 0-255
-uint8_t ledBrightness = 50;     // 0-255
+uint8_t screenBrightness = 80;
+uint8_t ledBrightness = 20;
 int settingsSelection = 0;
-bool settingsEditing = false;   // true when adjusting a value
-const int NUM_SETTINGS = 5;    // Mute, Screen, LED, Units, Back
-
-// Units: 0=ml, 1=fl oz
-int unitMode = 0;
-const char* unitLabels[] = {"ml", "oz"};
-const int NUM_UNITS = 2;
+bool settingsEditing = false;
+const int NUM_SETTINGS = 4;    // Mute, Screen, LED, Back
 unsigned long selectHoldStart = 0;
 bool selectHeld = false;
 bool selectConsumed = false;    // prevents hold from triggering click
@@ -251,24 +255,16 @@ void bootAnimation() {
 }
 
 // Convert grams to current unit and print to display
-float convertWeight(float grams) {
-  switch (unitMode) {
-    case 1: return grams / 29.5735;  // fl oz
-    default: return grams;           // ml (~= grams for liquids)
-  }
+void printCurrentWeight(float grams) {
+  float oz = grams / 29.5735;
+  display.print(oz, 1);
+  display.print("oz");
 }
 
-int weightDecimals() {
-  switch (unitMode) {
-    case 1: return 1;  // oz - 1 decimal
-    default: return 0; // ml - no decimals
-  }
-}
-
-void printWeight(float grams) {
-  float val = convertWeight(grams);
-  display.print(val, weightDecimals());
-  display.print(unitLabels[unitMode]);
+void printTargetWeight(float ml, float oz) {
+  if (oz == (int)oz) display.print(oz, 0);
+  else display.print(oz, 1);
+  display.print("oz");
 }
 
 void beep(unsigned long duration) {
@@ -370,7 +366,7 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
 
   ring.begin();
-  ring.setBrightness(50);
+  ring.setBrightness(ledBrightness);
   ring.clear();
   ring.show();
 
@@ -385,6 +381,8 @@ void setup() {
   }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+  display.ssd1306_command(SSD1306_SETCONTRAST);
+  display.ssd1306_command(screenBrightness);
   display.display();
 
   bootAnimation();
@@ -571,6 +569,8 @@ void loopAddGlass() {
     display.display();
     delay(1500);
 
+    settling = false;
+    lastPourWeight = 0;
     appState = STATE_POURING;
     return;
   }
@@ -593,6 +593,93 @@ void loopAddGlass() {
   display.display();
 }
 
+void advanceIngredient() {
+  Drink &drink = drinks[menuSelection];
+  currentIngredient++;
+  if (currentIngredient >= drink.numWeighed) {
+    currentUnweighed = 0;
+    if (drink.numUnweighed > 0) {
+      appState = STATE_UNWEIGHED;
+    } else {
+      appState = STATE_FINISH;
+    }
+    return;
+  }
+
+  cumulativeWeight = smoothed_weight;
+  target_reached = false;
+  settling = false;
+  lastPourWeight = 0;
+  for (int i = 0; i < LED_COUNT; i++) led_brightness[i] = 0;
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(43, 10);
+  display.print("Next:");
+  display.setTextSize(1);
+  const char* ingName = drink.weighed[currentIngredient].name;
+  int nameW = strlen(ingName) * 6;
+  display.setCursor((128 - nameW) / 2, 30);
+  display.print(ingName);
+  display.display();
+  delay(1500);
+}
+
+// ---- OVERPOUR STATE ----
+void loopOverpour() {
+  readScale();
+
+  Drink &drink = drinks[menuSelection];
+  Ingredient &ing = drink.weighed[currentIngredient];
+  float ingWeight = smoothed_weight - cumulativeWeight;
+
+  // Flash red ring
+  if ((millis() / 300) % 2 == 0) {
+    ring.fill(ring.Color(150, 0, 0));
+  } else {
+    ring.clear();
+  }
+  ring.show();
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Too much ");
+  display.print(ing.name);
+  display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  printCurrentWeight(ingWeight);
+  display.print("/");
+  printTargetWeight(ing.ml, ing.oz);
+
+  display.setTextSize(1);
+  display.setCursor(0, 38);
+  display.print("May need to adjust");
+  display.setCursor(0, 48);
+  display.print("other ingredients");
+
+  display.setCursor(0, 58);
+  display.print("[<] Start over  [>] OK");
+  display.display();
+
+  if (btnPressed(BTN_LEFT)) {
+    // Start over — back to menu
+    ring.clear();
+    ring.show();
+    appState = STATE_MENU;
+  }
+  if (btnPressed(BTN_RIGHT)) {
+    // Continue — accept the overpour
+    target_reached = true;
+    chimeAndBlink();
+    advanceIngredient();
+  }
+}
+
 // ---- POURING STATE ----
 void loopPouring() {
   readScale();
@@ -603,7 +690,7 @@ void loopPouring() {
   // Weight for this ingredient only (subtract previous cumulative)
   float ingWeight = smoothed_weight - cumulativeWeight;
   if (ingWeight < 0) ingWeight = 0;
-  float ingTarget = ing.weight;
+  float ingTarget = ing.ml;  // scale measures grams ≈ ml
 
   // Update ring based on per-ingredient progress
   if (!target_reached) {
@@ -635,49 +722,46 @@ void loopPouring() {
 
   display.setTextSize(2);
   display.setCursor(0, 26);
-  printWeight(ingWeight);
+  printCurrentWeight(ingWeight);
   display.print("/");
-  printWeight(ingTarget);
+  printTargetWeight(ing.ml, ing.oz);
 
   display.drawRect(0, 52, 128, 12, SSD1306_WHITE);
   display.fillRect(2, 54, (int)(124 * progress), 8, SSD1306_WHITE);
 
   display.display();
 
-  // Check target AFTER display update
-  if (!target_reached && ingWeight >= ingTarget) {
-    target_reached = true;
-    chimeAndBlink();
-
-    currentIngredient++;
-    if (currentIngredient >= drink.numWeighed) {
-      currentUnweighed = 0;
-      if (drink.numUnweighed > 0) {
-        appState = STATE_UNWIGHED;
-      } else {
-        appState = STATE_FINISH;
-      }
-      return;
+  // Settle detection: has user stopped pouring?
+  if (!target_reached) {
+    if (abs(ingWeight - lastPourWeight) > SETTLE_THRESHOLD) {
+      lastPourWeight = ingWeight;
+      settleStart = millis();
+      settling = false;
+    } else if (!settling && ingWeight > 2 && millis() - settleStart > SETTLE_TIME) {
+      settling = true;
     }
 
-    // Next weighed ingredient
-    cumulativeWeight = smoothed_weight;
-    target_reached = false;
-    for (int i = 0; i < LED_COUNT; i++) led_brightness[i] = 0;
+    // Check pour result after settling
+    if (settling) {
+      float diff = ingWeight - ingTarget;
 
-    display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(43, 10);
-    display.print("Next:");
-    display.setTextSize(1);
-    const char* ingName = drink.weighed[currentIngredient].name;
-    int nameW = strlen(ingName) * 6;
-    display.setCursor((128 - nameW) / 2, 30);
-    display.print(ingName);
-    display.display();
-    delay(1500);
-    return;
+      if (diff > WAY_OVER) {
+        // Way over — warn
+        appState = STATE_OVERPOUR;
+        return;
+      }
+
+      if (diff >= -CLOSE_ENOUGH) {
+        // Close enough — accept
+        target_reached = true;
+        chimeAndBlink();
+        advanceIngredient();
+        return;
+      }
+
+      // Still under — reset settle, user may pour more
+      settling = false;
+    }
   }
 }
 
@@ -768,17 +852,17 @@ void loopSettings() {
         case 0: muted = !muted; break;
         case 1:
           screenBrightness = (uint8_t)constrain((int)screenBrightness + dir * 5, 5, 255);
+          display.dim(screenBrightness < 128);
           display.ssd1306_command(SSD1306_SETCONTRAST);
           display.ssd1306_command(screenBrightness);
+          display.ssd1306_command(0xD9);  // pre-charge period
+          display.ssd1306_command(screenBrightness < 128 ? 0x22 : 0xF1);
           break;
         case 2:
           ledBrightness = (uint8_t)constrain((int)ledBrightness + dir * 5, 5, 255);
           ring.setBrightness(ledBrightness);
           ring.fill(ring.Color(100, 100, 100));
           ring.show();
-          break;
-        case 3: // Units
-          unitMode = (unitMode + dir + NUM_UNITS) % NUM_UNITS;
           break;
       }
     }
@@ -797,7 +881,7 @@ void loopSettings() {
       settingsSelection = (settingsSelection - 1 + NUM_SETTINGS) % NUM_SETTINGS;
     }
     if (selectPressed()) {
-      if (settingsSelection == 4) {
+      if (settingsSelection == 3) {
         // Back to where we came from
         appState = stateBeforeSettings;
         return;
@@ -813,9 +897,9 @@ void loopSettings() {
   display.print("Settings");
   display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
-  const char* labels[] = {"Sound", "Screen", "LED", "Units", "Back"};
+  const char* labels[] = {"Sound", "Screen", "LED", "Back"};
   for (int i = 0; i < NUM_SETTINGS; i++) {
-    display.setCursor(10, 14 + i * 10);
+    display.setCursor(10, 14 + i * 12);
     if (i == settingsSelection) {
       display.print(settingsEditing ? "* " : "> ");
     } else {
@@ -835,8 +919,7 @@ void loopSettings() {
         display.print(pct); display.print("%");
         break;
       }
-      case 3: display.print(unitLabels[unitMode]); break;
-      case 4: break;
+      case 3: break;
     }
   }
 
@@ -855,8 +938,9 @@ void loop() {
     case STATE_MENU:      loopMenu();      break;
     case STATE_ADD_GLASS:  loopAddGlass();  break;
     case STATE_POURING:    loopPouring();   break;
-    case STATE_UNWIGHED:   loopUnweighed(); break;
+    case STATE_UNWEIGHED:   loopUnweighed(); break;
     case STATE_FINISH:     loopFinish();    break;
+    case STATE_OVERPOUR:   loopOverpour();  break;
     case STATE_SETTINGS:   loopSettings();  break;
   }
   delay(20);
