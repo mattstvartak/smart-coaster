@@ -155,8 +155,10 @@ const float WAY_OVER = 15.0;            // grams over = overpour warning
 
 // Settings
 bool muted = false;
-uint8_t screenBrightness = 80;
-uint8_t ledBrightness = 20;
+int screenLevel = 0;  // 0=Dim, 1=Normal, 2=Bright
+int ledLevel = 0;     // 0=Dim, 1=Normal, 2=Bright
+const uint8_t ledLevels[] = {10, 40, 120};
+const char* brightLabels[] = {"Dim", "Normal", "Bright"};
 int settingsSelection = 0;
 bool settingsEditing = false;
 const int NUM_SETTINGS = 4;    // Mute, Screen, LED, Back
@@ -366,7 +368,7 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
 
   ring.begin();
-  ring.setBrightness(ledBrightness);
+  ring.setBrightness(ledLevels[ledLevel]);
   ring.clear();
   ring.show();
 
@@ -381,8 +383,7 @@ void setup() {
   }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  display.ssd1306_command(SSD1306_SETCONTRAST);
-  display.ssd1306_command(screenBrightness);
+  display.dim(screenLevel == 0);
   display.display();
 
   bootAnimation();
@@ -851,16 +852,12 @@ void loopSettings() {
       switch (settingsSelection) {
         case 0: muted = !muted; break;
         case 1:
-          screenBrightness = (uint8_t)constrain((int)screenBrightness + dir * 5, 5, 255);
-          display.dim(screenBrightness < 128);
-          display.ssd1306_command(SSD1306_SETCONTRAST);
-          display.ssd1306_command(screenBrightness);
-          display.ssd1306_command(0xD9);  // pre-charge period
-          display.ssd1306_command(screenBrightness < 128 ? 0x22 : 0xF1);
+          screenLevel = constrain(screenLevel + dir, 0, 2);
+          display.dim(screenLevel == 0);
           break;
         case 2:
-          ledBrightness = (uint8_t)constrain((int)ledBrightness + dir * 5, 5, 255);
-          ring.setBrightness(ledBrightness);
+          ledLevel = constrain(ledLevel + dir, 0, 2);
+          ring.setBrightness(ledLevels[ledLevel]);
           ring.fill(ring.Color(100, 100, 100));
           ring.show();
           break;
@@ -909,16 +906,8 @@ void loopSettings() {
     display.print(": ");
     switch (i) {
       case 0: display.print(muted ? "OFF" : "ON"); break;
-      case 1: {
-        int pct = (screenBrightness * 100) / 255;
-        display.print(pct); display.print("%");
-        break;
-      }
-      case 2: {
-        int pct = (ledBrightness * 100) / 255;
-        display.print(pct); display.print("%");
-        break;
-      }
+      case 1: display.print(brightLabels[screenLevel]); break;
+      case 2: display.print(brightLabels[ledLevel]); break;
       case 3: break;
     }
   }
