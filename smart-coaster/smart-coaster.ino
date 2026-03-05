@@ -163,7 +163,7 @@ const uint8_t ledLevels[] = {10, 40, 120};
 const char* brightLabels[] = {"Dim", "Normal", "Bright"};
 int settingsSelection = 0;
 bool settingsEditing = false;
-const int NUM_SETTINGS = 4;    // Mute, Screen, LED, Back
+const int NUM_SETTINGS = 5;    // Sound, Screen, LED, Sleep, Back
 unsigned long selectHoldStart = 0;
 bool selectHeld = false;
 bool selectConsumed = false;    // prevents hold from triggering click
@@ -465,10 +465,6 @@ void updateSelectHold() {
       selectHoldStart = millis();
       selectConsumed = false;
       lastActivity = millis();
-    } else if (!selectConsumed && millis() - selectHoldStart > 5000) {
-      selectConsumed = true;
-      beep(100);
-      goToSleep();
     } else if (!selectConsumed && millis() - selectHoldStart > 2000) {
       selectConsumed = true;
       settingsSelection = 0;
@@ -923,7 +919,10 @@ void loopSettings() {
     }
     if (selectPressed()) {
       if (settingsSelection == 3) {
-        // Back to where we came from
+        goToSleep();
+        return;
+      }
+      if (settingsSelection == 4) {
         appState = stateBeforeSettings;
         return;
       }
@@ -938,21 +937,22 @@ void loopSettings() {
   display.print("Settings");
   display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
-  const char* labels[] = {"Sound", "Screen", "LED", "Back"};
+  const char* labels[] = {"Sound", "Screen", "LED", "Sleep", "Back"};
   for (int i = 0; i < NUM_SETTINGS; i++) {
-    display.setCursor(10, 14 + i * 12);
+    display.setCursor(10, 14 + i * 10);
     if (i == settingsSelection) {
       display.print(settingsEditing ? "* " : "> ");
     } else {
       display.print("  ");
     }
     display.print(labels[i]);
-    display.print(": ");
-    switch (i) {
-      case 0: display.print(muted ? "OFF" : "ON"); break;
-      case 1: display.print(brightLabels[screenLevel]); break;
-      case 2: display.print(brightLabels[ledLevel]); break;
-      case 3: break;
+    if (i <= 2) {
+      display.print(": ");
+      switch (i) {
+        case 0: display.print(muted ? "OFF" : "ON"); break;
+        case 1: display.print(brightLabels[screenLevel]); break;
+        case 2: display.print(brightLabels[ledLevel]); break;
+      }
     }
   }
 
