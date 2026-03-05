@@ -3,6 +3,8 @@
 #include <Adafruit_SSD1306.h>
 #include <HX711.h>
 #include <Adafruit_NeoPixel.h>
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
 
 #define HX711_DOUT 4
 #define HX711_SCK  SCK
@@ -166,6 +168,10 @@ unsigned long selectHoldStart = 0;
 bool selectHeld = false;
 bool selectConsumed = false;    // prevents hold from triggering click
 State stateBeforeSettings = STATE_MENU;
+
+// Sleep
+const unsigned long SLEEP_TIMEOUT = 300000;  // 5 minutes auto-sleep
+unsigned long lastActivity = 0;
 
 void playTone(int pin, int freq, int duration) {
   if (muted) { delay(duration); return; }
@@ -358,6 +364,35 @@ void updateRingProgress(float weight) {
   ring.show();
 }
 
+void goToSleep() {
+  // Show sleep message briefly
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(34, 28);
+  display.print("Sleeping...");
+  display.display();
+  delay(800);
+
+  // Turn off peripherals
+  display.clearDisplay();
+  display.display();
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
+  ring.clear();
+  ring.show();
+  scale.power_down();
+
+  // Enable RTC pullups so buttons stay HIGH during deep sleep
+  rtc_gpio_pullup_en((gpio_num_t)BTN_SELECT);
+  rtc_gpio_pullup_en((gpio_num_t)BTN_LEFT);
+  rtc_gpio_pullup_en((gpio_num_t)BTN_RIGHT);
+
+  // Wake on any button press (active LOW)
+  uint64_t wakeupMask = (1ULL << BTN_SELECT) | (1ULL << BTN_LEFT) | (1ULL << BTN_RIGHT);
+  esp_sleep_enable_ext1_wakeup(wakeupMask, ESP_EXT1_WAKEUP_ANY_LOW);
+  esp_deep_sleep_start();
+  // Device resets on wake — setup() runs again
+}
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -394,14 +429,17 @@ void setup() {
   display.setTextWrap(false);
   display.display();
   appState = STATE_MENU;
+  lastActivity = millis();
 }
 
 void readScale() {
   if (scale.is_ready()) {
     float raw = scale.get_units(1);
+    float prev = smoothed_weight;
     smoothed_weight = smoothed_weight * 0.5 + raw * 0.5;
     smoothed_weight = round(smoothed_weight);
     if (smoothed_weight < 0) smoothed_weight = 0;
+    if (abs(smoothed_weight - prev) >= 2) lastActivity = millis();
   }
 }
 
@@ -410,6 +448,7 @@ bool btnPressed(int pin) {
   if (pin == BTN_SELECT) return false;  // handled by updateSelectHold
   if (millis() - last_btn_time > 150 && digitalRead(pin) == LOW) {
     last_btn_time = millis();
+    lastActivity = millis();
     beep(30);
     return true;
   }
@@ -425,6 +464,11 @@ void updateSelectHold() {
       selectHeld = true;
       selectHoldStart = millis();
       selectConsumed = false;
+      lastActivity = millis();
+    } else if (!selectConsumed && millis() - selectHoldStart > 5000) {
+      selectConsumed = true;
+      beep(100);
+      goToSleep();
     } else if (!selectConsumed && millis() - selectHoldStart > 2000) {
       selectConsumed = true;
       settingsSelection = 0;
@@ -922,6 +966,11 @@ void loopSettings() {
 
 void loop() {
   updateSelectHold();
+
+  // Auto-sleep after inactivity
+  if (millis() - lastActivity > SLEEP_TIMEOUT) {
+    goToSleep();
+  }
 
   switch (appState) {
     case STATE_MENU:      loopMenu();      break;
